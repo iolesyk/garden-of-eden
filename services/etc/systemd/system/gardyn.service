@@ -1,0 +1,24 @@
+[Unit]
+Description=Gardyn Hydroponic System
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=oles
+Group=oles
+WorkingDirectory=/home/oles/garden-of-eden
+Environment=PATH=/home/oles/garden-of-eden/venv/bin
+ExecStart=/home/oles/garden-of-eden/venv/bin/python3 /home/oles/garden-of-eden/mqtt.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Environment variables (optional - you can also use .env file)
+# Environment=MQTT_BROKER=192.168.x.x
+# Environment=MQTT_USERNAME=
+# Environment=MQTT_PASSWORD=
+
+[Install]
+WantedBy=multi-user.target
