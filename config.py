@@ -31,6 +31,15 @@ AUTO_PUMP_NIGHT_OFF_TIME = int(os.getenv("AUTO_PUMP_NIGHT_OFF_TIME", "30"))
 AUTO_PUMP_DAY_START_HOUR = int(os.getenv("AUTO_PUMP_DAY_START_HOUR", "6"))
 AUTO_PUMP_DAY_END_HOUR = int(os.getenv("AUTO_PUMP_DAY_END_HOUR", "18"))
 
+# Temperature-based pump control (day only)
+TEMP_PUMP_ENABLED = os.getenv("TEMP_PUMP_ENABLED", "true").lower() in ("true", "1", "yes", "on")
+TEMP_PUMP_THRESHOLD_1 = float(os.getenv("TEMP_PUMP_THRESHOLD_1", "27.0"))  # First threshold
+TEMP_PUMP_ON_TIME_1 = int(os.getenv("TEMP_PUMP_ON_TIME_1", "10"))  # Minutes ON
+TEMP_PUMP_OFF_TIME_1 = int(os.getenv("TEMP_PUMP_OFF_TIME_1", "10"))  # Minutes OFF
+TEMP_PUMP_THRESHOLD_2 = float(os.getenv("TEMP_PUMP_THRESHOLD_2", "29.0"))  # Second threshold
+TEMP_PUMP_ON_TIME_2 = int(os.getenv("TEMP_PUMP_ON_TIME_2", "5"))  # Minutes ON
+TEMP_PUMP_OFF_TIME_2 = int(os.getenv("TEMP_PUMP_OFF_TIME_2", "5"))  # Minutes OFF
+
 UPPER_CAMERA_DEVICE = os.getenv("UPPER_CAMERA_DEVICE", "/dev/video0")
 LOWER_CAMERA_DEVICE = os.getenv("LOWER_CAMERA_DEVICE", "/dev/video2")
 UPPER_IMAGE_PATH = os.getenv("UPPER_IMAGE_PATH", "/tmp/upper_camera.jpg")

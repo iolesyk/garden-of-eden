@@ -9,7 +9,7 @@ from datetime import datetime
 # import picamera
 # import cv2
 from time import sleep
-from config import USERNAME, PASSWORD, BROKER, PORT, KEEP_ALIVE_INTERVAL, BASE_TOPIC, IDENTIFIER, MODEL, VERSION, WATER_LOW_CM, UPPER_CAMERA_DEVICE, LOWER_CAMERA_DEVICE, UPPER_IMAGE_PATH, LOWER_IMAGE_PATH, CAMERA_RESOLUTION, IMAGE_INTERVAL_SECONDS, AUTO_PUMP_ENABLED, AUTO_PUMP_DAY_ON_TIME, AUTO_PUMP_DAY_OFF_TIME, AUTO_PUMP_NIGHT_ON_TIME, AUTO_PUMP_NIGHT_OFF_TIME, AUTO_PUMP_DAY_START_HOUR, AUTO_PUMP_DAY_END_HOUR
+from config import USERNAME, PASSWORD, BROKER, PORT, KEEP_ALIVE_INTERVAL, BASE_TOPIC, IDENTIFIER, MODEL, VERSION, WATER_LOW_CM, UPPER_CAMERA_DEVICE, LOWER_CAMERA_DEVICE, UPPER_IMAGE_PATH, LOWER_IMAGE_PATH, CAMERA_RESOLUTION, IMAGE_INTERVAL_SECONDS, AUTO_PUMP_ENABLED, AUTO_PUMP_DAY_ON_TIME, AUTO_PUMP_DAY_OFF_TIME, AUTO_PUMP_NIGHT_ON_TIME, AUTO_PUMP_NIGHT_OFF_TIME, AUTO_PUMP_DAY_START_HOUR, AUTO_PUMP_DAY_END_HOUR, TEMP_PUMP_ENABLED, TEMP_PUMP_THRESHOLD_1, TEMP_PUMP_ON_TIME_1, TEMP_PUMP_OFF_TIME_1, TEMP_PUMP_THRESHOLD_2, TEMP_PUMP_ON_TIME_2, TEMP_PUMP_OFF_TIME_2
 
 from gpiozero import Button  # Import gpiozero Button
 from gpiozero.pins.pigpio import PiGPIOFactory
@@ -17,6 +17,7 @@ from gpiozero.pins.pigpio import PiGPIOFactory
 from app.sensors.light.light import Light
 from app.sensors.pump.pump import Pump
 from app.sensors.pcb_temp.pcb_temp import get_pcb_temperature
+import subprocess
 from app.sensors.temperature.temperature import temperature_sensor
 from app.sensors.humidity.humidity import humidity_sensor
 from app.sensors.distance.distance import Distance, MeasurementError
@@ -69,7 +70,7 @@ press_count = 0
 double_press_timer = None
 
 # Variables for automatic pump cycling
-auto_pump_enabled = AUTO_PUMP_ENABLED
+auto_pump_enabled = False  # Runtime state - starts as False
 auto_pump_timer = None
 
 # Day/Night schedule configuration (loaded from environment)
@@ -200,11 +201,59 @@ def is_daytime():
     current_hour = datetime.now().hour
     return day_start_hour <= current_hour < day_end_hour
 
+def get_cpu_temperature():
+    """Get CPU temperature using vcgencmd"""
+    try:
+        result = subprocess.run(['vcgencmd', 'measure_temp'], capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            # Parse output like "temp=50.3'C"
+            temp_str = result.stdout.strip()
+            temp_value = float(temp_str.split('=')[1].split("'")[0])
+            return temp_value
+        else:
+            logger.error(f"vcgencmd failed: {result.stderr}")
+            return None
+    except subprocess.TimeoutExpired:
+        logger.error("vcgencmd timeout")
+        return None
+    except Exception as e:
+        logger.error(f"Failed to get CPU temperature: {e}")
+        return None
+
 def get_pump_schedule():
-    """Get the current pump schedule based on day/night time"""
+    """Get the current pump schedule based on day/night time and temperature"""
     if is_daytime():
-        return day_pump_on_time, day_pump_off_time
+        # Check if temperature-based pump control is enabled and it's day time
+        if TEMP_PUMP_ENABLED:
+            try:
+                temperature = temperature_sensor.read()
+                logger.info(f"🌡️ Current temperature: {temperature:.2f}°C")
+                
+                # Check temperature thresholds
+                if temperature >= TEMP_PUMP_THRESHOLD_2:
+                    # High temperature scenario (≥29°C)
+                    logger.info(f"🔥 HIGH TEMP: {temperature:.2f}°C ≥ {TEMP_PUMP_THRESHOLD_2}°C")
+                    logger.info(f"⏰ Schedule: {TEMP_PUMP_ON_TIME_2}min ON / {TEMP_PUMP_OFF_TIME_2}min OFF")
+                    return TEMP_PUMP_ON_TIME_2, TEMP_PUMP_OFF_TIME_2
+                elif temperature >= TEMP_PUMP_THRESHOLD_1:
+                    # Medium temperature scenario (≥27°C)
+                    logger.info(f"🌡️ MEDIUM TEMP: {temperature:.2f}°C ≥ {TEMP_PUMP_THRESHOLD_1}°C")
+                    logger.info(f"⏰ Schedule: {TEMP_PUMP_ON_TIME_1}min ON / {TEMP_PUMP_OFF_TIME_1}min OFF")
+                    return TEMP_PUMP_ON_TIME_1, TEMP_PUMP_OFF_TIME_1
+                else:
+                    # Normal temperature - use regular day schedule
+                    logger.info(f"🌤️ NORMAL TEMP: {temperature:.2f}°C < {TEMP_PUMP_THRESHOLD_1}°C")
+                    logger.info(f"⏰ Schedule: Regular day schedule ({day_pump_on_time}min ON / {day_pump_off_time}min OFF)")
+                    return day_pump_on_time, day_pump_off_time
+            except Exception as e:
+                logger.error(f"❌ Failed to read temperature for pump control: {e}")
+                # Fall back to regular day schedule
+                return day_pump_on_time, day_pump_off_time
+        else:
+            # Temperature-based control disabled, use regular day schedule
+            return day_pump_on_time, day_pump_off_time
     else:
+        # Night time - use regular night schedule
         return night_pump_on_time, night_pump_off_time
 
 def start_auto_pump_cycle(client):
@@ -538,6 +587,19 @@ def send_discovery_messages(client):
     }
     client.publish(TEMP_CONFIG_TOPIC, json.dumps(temp_config_payload), retain=True)
 
+    #Config for CPU Temperature Sensor
+    TEMP_CONFIG_TOPIC = "homeassistant/sensor/gardyn/"+IDENTIFIER+"_cpu_temperature/config"
+    temp_config_payload = {
+        "name": "CPU Temperature",
+        "unique_id": IDENTIFIER + "_cpu_temperature",
+        "state_topic": BASE_TOPIC + "/cpu/temperature",
+        "command_topic": BASE_TOPIC + "/cpu/temperature/get",
+        "unit_of_measurement": "°C",
+        "device_class": "temperature",
+        "device": device_info
+    }
+    client.publish(TEMP_CONFIG_TOPIC, json.dumps(temp_config_payload), retain=True)
+
     #Config for Humidity Sensor
     TEMP_CONFIG_TOPIC = "homeassistant/sensor/gardyn/"+IDENTIFIER+"_humidity/config"
     temp_config_payload = {
@@ -644,7 +706,7 @@ def on_connect(client, userdata, flags, rc, properties=None):
     publish_water_low_mode(client)
     
     # Publish initial auto pump state and configuration
-    if auto_pump_enabled:
+    if AUTO_PUMP_ENABLED:  # Check configuration setting, not runtime state
         client.publish(BASE_TOPIC + "/pump/auto/state", "ON", retain=True)
         logger.info("🚀 Auto pump enabled on startup - starting cycle")
         start_auto_pump_cycle(client)
@@ -652,7 +714,9 @@ def on_connect(client, userdata, flags, rc, properties=None):
         client.publish(BASE_TOPIC + "/pump/auto/state", "OFF", retain=True)
         logger.info("⏹️  Auto pump disabled on startup")
     
-    client.publish(BASE_TOPIC + "/pump/auto/schedule", "night", retain=True)
+    # Publish current day/night status
+    current_schedule = "day" if is_daytime() else "night"
+    client.publish(BASE_TOPIC + "/pump/auto/schedule", current_schedule, retain=True)
     client.publish(BASE_TOPIC + "/pump/auto/day/on_time", str(day_pump_on_time), retain=True)
     client.publish(BASE_TOPIC + "/pump/auto/day/off_time", str(day_pump_off_time), retain=True)
     client.publish(BASE_TOPIC + "/pump/auto/night/on_time", str(night_pump_on_time), retain=True)
@@ -802,6 +866,11 @@ def on_message(client, userdata, msg):
             pcb_temp = get_pcb_temperature()
             client.publish(BASE_TOPIC + "/pcb/temperature", f"{pcb_temp:.2f}")
 
+        elif topic_suffix == "cpu/temperature/get":
+            cpu_temp = get_cpu_temperature()
+            if cpu_temp is not None:
+                client.publish(BASE_TOPIC + "/cpu/temperature", f"{cpu_temp:.2f}")
+
         elif topic_suffix == "temperature/get":
             temperature = temperature_sensor.read()
             client.publish(BASE_TOPIC + "/temperature", f"{temperature:.2f}")
@@ -821,7 +890,20 @@ def publish_pcb_temperature(client):
             client.publish(BASE_TOPIC + "/pcb/temperature", f"{pcb_temp:.2f}")
         except Exception as e:
             logger.error(f"Failed to read or publish PCB temperature: {e}")
-        sleep(30*60)  # Publish frequency, every x seconds
+        sleep(1*60)  # Publish frequency, every x seconds
+
+def publish_cpu_temperature(client):
+    while True:
+        try:
+            cpu_temp = get_cpu_temperature()
+            if cpu_temp is not None:
+                logger.info(f"Publishing CPU Temperature: {cpu_temp:.2f}°C")
+                client.publish(BASE_TOPIC + "/cpu/temperature", f"{cpu_temp:.2f}")
+            else:
+                logger.warning("CPU temperature reading failed, skipping publish")
+        except Exception as e:
+            logger.error(f"Failed to read or publish CPU temperature: {e}")
+        sleep(1*60)  # Publish frequency, every x seconds
 
 def publish_temperature(client):
     while True:
@@ -831,7 +913,7 @@ def publish_temperature(client):
             client.publish(BASE_TOPIC + "/temperature", f"{temperature:.2f}")
         except Exception as e:
             logger.error(f"Failed to read or publish ambient temperature: {e}")
-        sleep(30*60)  # Publish frequency, every x seconds
+        sleep(1*60)  # Publish frequency, every x seconds
 
 def publish_humidity(client):
     while True:
@@ -841,7 +923,7 @@ def publish_humidity(client):
             client.publish(BASE_TOPIC + "/humidity", f"{humidity:.2f}")
         except Exception as e:
             logger.error(f"Failed to read or publish ambient humidity: {e}")
-        sleep(30*60)  # Publish frequency, every x seconds
+        sleep(1*60)  # Publish frequency, every x seconds
 
 def publish_water_level(client):
     while True:
@@ -901,6 +983,10 @@ if __name__ == "__main__":
     pcb_temp_thread = threading.Thread(target=publish_pcb_temperature, args=(client,))
     pcb_temp_thread.daemon = True
     pcb_temp_thread.start()
+
+    cpu_temp_thread = threading.Thread(target=publish_cpu_temperature, args=(client,))
+    cpu_temp_thread.daemon = True
+    cpu_temp_thread.start()
 
     temperature_thread = threading.Thread(target=publish_temperature, args=(client,))
     temperature_thread.daemon = True

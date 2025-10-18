@@ -8,17 +8,15 @@ Type=simple
 User=oles
 Group=oles
 WorkingDirectory=/home/oles/garden-of-eden
-Environment=PATH=/home/oles/garden-of-eden/venv/bin
+Environment=PATH=/home/oles/garden-of-eden/venv/bin:/opt/vc/bin:/usr/bin:/bin
 ExecStart=/home/oles/garden-of-eden/venv/bin/python3 /home/oles/garden-of-eden/mqtt.py
 Restart=always
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
 
-# Environment variables (optional - you can also use .env file)
-# Environment=MQTT_BROKER=192.168.x.x
-# Environment=MQTT_USERNAME=
-# Environment=MQTT_PASSWORD=
+# Load environment variables from .env file
+EnvironmentFile=/home/oles/garden-of-eden/.env
 
 [Install]
 WantedBy=multi-user.target
