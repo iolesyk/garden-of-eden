@@ -157,18 +157,21 @@ def flash_lights(times=3, delay=0.3):
     else:
         light.off()
 
+distance_lock = threading.Lock()
+
 def safe_distance_measure():
     global distance_sensor
-    try:
-        return distance_sensor.measure_once()
-    except MeasurementError as e:
-        logger.warning(f"Distance measure failed: {e}, trying recovery")
+    with distance_lock:
         try:
-            distance_sensor = Distance(pin_factory=pin_factory)
-            return distance_sensor.measure_once()
-        except Exception as e2:
-            logger.error(f"Distance full recovery failed: {e2}")
-            return None
+            return distance_sensor.measure()
+        except MeasurementError as e:
+            logger.warning(f"Distance measure failed: {e}, trying recovery")
+            try:
+                distance_sensor = Distance(pin_factory=pin_factory)
+                return distance_sensor.measure()
+            except Exception as e2:
+                logger.error(f"Distance full recovery failed: {e2}")
+                return None
 
 def publish_water_low_mode(client):
     if WATER_LOW_CM not in (None, 0):
@@ -359,9 +362,11 @@ def cycle_auto_pump(client):
             auto_pump_timer = Timer(next_duration, cycle_auto_pump, args=(client,))
             auto_pump_timer.start()
             return
-        else:
+        elif distance is not None:
             logger.info(f"✅ Water level OK: {distance:.2f}cm")
             client.publish(BASE_TOPIC + "/water/low/state", "OFF", retain=True)
+        else:
+            logger.warning("⚠️  Water level measurement failed - running pump cycle anyway")
     
     # Determine next action based on current pump state
     if pump_is_on:
@@ -401,13 +406,7 @@ def on_connect(client, userdata, flags, rc, properties=None):
     publish_water_low_mode(client)
     
     # Publish initial auto pump state and configuration
-    if AUTO_PUMP_ENABLED:  # Check configuration setting, not runtime state
-        client.publish(BASE_TOPIC + "/pump/auto/state", "ON", retain=True)
-        logger.info("🚀 Auto pump enabled on startup - starting cycle")
-        start_auto_pump_cycle(client)
-    else:
-        client.publish(BASE_TOPIC + "/pump/auto/state", "OFF", retain=True)
-        logger.info("⏹️  Auto pump disabled on startup")
+    client.publish(BASE_TOPIC + "/pump/auto/state", "ON" if auto_pump_enabled else "OFF", retain=True)
     
     # Publish current day/night status
     current_schedule = "day" if is_daytime() else "night"
@@ -636,7 +635,13 @@ if __name__ == "__main__":
     client.on_connect = on_connect
     client.on_message = on_message
     client.username_pw_set(USERNAME, PASSWORD)
-    client.connect(BROKER, PORT, KEEP_ALIVE_INTERVAL)
+    client.connect_async(BROKER, PORT, KEEP_ALIVE_INTERVAL)
+
+    if AUTO_PUMP_ENABLED:
+        logger.info("🚀 Auto pump enabled on startup - starting cycle")
+        start_auto_pump_cycle(client)
+    else:
+        logger.info("⏹️  Auto pump disabled on startup")
 
     pcb_temp_thread = threading.Thread(target=publish_pcb_temperature, args=(client,))
     pcb_temp_thread.daemon = True
@@ -658,5 +663,5 @@ if __name__ == "__main__":
     water_level_thread.daemon = True
     water_level_thread.start()
 
-    client.loop_forever()
+    client.loop_forever(retry_first_connection=True)
 

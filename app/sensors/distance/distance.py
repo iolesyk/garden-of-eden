@@ -69,6 +69,7 @@ class Distance:
                 measurements.append(measurement)
             except MeasurementError:
                 pass  # Handle individual measurement errors gracefully
+            sleep(0.2)
         if not measurements:
             raise MeasurementError("No successful measurements")
         median_value = self.median(measurements)
