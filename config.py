@@ -31,6 +31,13 @@ AUTO_PUMP_NIGHT_OFF_TIME = int(os.getenv("AUTO_PUMP_NIGHT_OFF_TIME", "30"))
 AUTO_PUMP_DAY_START_HOUR = int(os.getenv("AUTO_PUMP_DAY_START_HOUR", "6"))
 AUTO_PUMP_DAY_END_HOUR = int(os.getenv("AUTO_PUMP_DAY_END_HOUR", "18"))
 
+# Sunny time slot (time-based, not temperature-based)
+SUNNY_TIME_ENABLED = os.getenv("SUNNY_TIME_ENABLED", "true").lower() in ("true", "1", "yes", "on")
+SUNNY_TIME_START_HOUR = int(os.getenv("SUNNY_TIME_START_HOUR", "12"))  # Start at noon
+SUNNY_TIME_END_HOUR = int(os.getenv("SUNNY_TIME_END_HOUR", "15"))  # End at 3 PM
+SUNNY_TIME_ON_TIME = int(os.getenv("SUNNY_TIME_ON_TIME", "3"))  # Minutes ON
+SUNNY_TIME_OFF_TIME = int(os.getenv("SUNNY_TIME_OFF_TIME", "2"))  # Minutes OFF
+
 # Temperature-based pump control (day only)
 TEMP_PUMP_ENABLED = os.getenv("TEMP_PUMP_ENABLED", "true").lower() in ("true", "1", "yes", "on")
 TEMP_PUMP_THRESHOLD_1 = float(os.getenv("TEMP_PUMP_THRESHOLD_1", "27.0"))  # First threshold
@@ -46,3 +53,4 @@ UPPER_IMAGE_PATH = os.getenv("UPPER_IMAGE_PATH", "/tmp/upper_camera.jpg")
 LOWER_IMAGE_PATH = os.getenv("LOWER_IMAGE_PATH", "/tmp/lower_camera.jpg")
 CAMERA_RESOLUTION = os.getenv("CAMERA_RESOLUTION", "640x480")
 IMAGE_INTERVAL_SECONDS = int(os.getenv("IMAGE_INTERVAL_SECONDS", "3600"))
+

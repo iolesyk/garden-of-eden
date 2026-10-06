@@ -23,7 +23,7 @@ class GPIOController:
             raise RuntimeError("pigpio.pi client is not initialized.")
 
 class Light:
-    def __init__(self, pin=18, frequency=8000, pin_factory=None):
+    def __init__(self, pin=18, frequency=20000, pin_factory=None):
         # pigpiod is running on port 8888
         # Note: for docker: PiGPIOFactory(host='pigpiod', port=8888)
         self.pin = pin

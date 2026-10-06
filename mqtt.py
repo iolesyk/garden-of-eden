@@ -9,7 +9,7 @@ from datetime import datetime
 # import picamera
 # import cv2
 from time import sleep
-from config import USERNAME, PASSWORD, BROKER, PORT, KEEP_ALIVE_INTERVAL, BASE_TOPIC, IDENTIFIER, MODEL, VERSION, WATER_LOW_CM, UPPER_CAMERA_DEVICE, LOWER_CAMERA_DEVICE, UPPER_IMAGE_PATH, LOWER_IMAGE_PATH, CAMERA_RESOLUTION, IMAGE_INTERVAL_SECONDS, AUTO_PUMP_ENABLED, AUTO_PUMP_DAY_ON_TIME, AUTO_PUMP_DAY_OFF_TIME, AUTO_PUMP_NIGHT_ON_TIME, AUTO_PUMP_NIGHT_OFF_TIME, AUTO_PUMP_DAY_START_HOUR, AUTO_PUMP_DAY_END_HOUR, TEMP_PUMP_ENABLED, TEMP_PUMP_THRESHOLD_1, TEMP_PUMP_ON_TIME_1, TEMP_PUMP_OFF_TIME_1, TEMP_PUMP_THRESHOLD_2, TEMP_PUMP_ON_TIME_2, TEMP_PUMP_OFF_TIME_2
+from config import USERNAME, PASSWORD, BROKER, PORT, KEEP_ALIVE_INTERVAL, BASE_TOPIC, IDENTIFIER, MODEL, VERSION, WATER_LOW_CM, UPPER_CAMERA_DEVICE, LOWER_CAMERA_DEVICE, UPPER_IMAGE_PATH, LOWER_IMAGE_PATH, CAMERA_RESOLUTION, IMAGE_INTERVAL_SECONDS, AUTO_PUMP_ENABLED, AUTO_PUMP_DAY_ON_TIME, AUTO_PUMP_DAY_OFF_TIME, AUTO_PUMP_NIGHT_ON_TIME, AUTO_PUMP_NIGHT_OFF_TIME, AUTO_PUMP_DAY_START_HOUR, AUTO_PUMP_DAY_END_HOUR, SUNNY_TIME_ENABLED, SUNNY_TIME_START_HOUR, SUNNY_TIME_END_HOUR, SUNNY_TIME_ON_TIME, SUNNY_TIME_OFF_TIME, TEMP_PUMP_ENABLED, TEMP_PUMP_THRESHOLD_1, TEMP_PUMP_ON_TIME_1, TEMP_PUMP_OFF_TIME_1, TEMP_PUMP_THRESHOLD_2, TEMP_PUMP_ON_TIME_2, TEMP_PUMP_OFF_TIME_2
 
 from gpiozero import Button  # Import gpiozero Button
 from gpiozero.pins.pigpio import PiGPIOFactory
@@ -201,6 +201,13 @@ def is_daytime():
     current_hour = datetime.now().hour
     return day_start_hour <= current_hour < day_end_hour
 
+def is_sunny_time():
+    """Determine if current time is sunny time slot"""
+    if not SUNNY_TIME_ENABLED:
+        return False
+    current_hour = datetime.now().hour
+    return SUNNY_TIME_START_HOUR <= current_hour < SUNNY_TIME_END_HOUR
+
 def get_cpu_temperature():
     """Get CPU temperature using vcgencmd"""
     try:
@@ -221,8 +228,14 @@ def get_cpu_temperature():
         return None
 
 def get_pump_schedule():
-    """Get the current pump schedule based on day/night time and temperature"""
+    """Get the current pump schedule based on day/night time, sunny time, and temperature"""
     if is_daytime():
+        # Check if it's sunny time first (highest priority)
+        if is_sunny_time():
+            logger.info(f"☀️ SUNNY TIME: {datetime.now().hour}:00 - {SUNNY_TIME_END_HOUR}:00")
+            logger.info(f"⏰ Schedule: {SUNNY_TIME_ON_TIME}min ON / {SUNNY_TIME_OFF_TIME}min OFF")
+            return SUNNY_TIME_ON_TIME, SUNNY_TIME_OFF_TIME
+        
         # Check if temperature-based pump control is enabled and it's day time
         if TEMP_PUMP_ENABLED:
             try:
@@ -381,328 +394,10 @@ def cycle_auto_pump(client):
     auto_pump_timer.start()
     logger.info("⏰ Timer scheduled for next cycle")
 
-# https://www.home-assistant.io/integrations/mqtt/#discovery-messages
-#  Note: homeassistant/<component>/[<node_id>/]<object_id>/config.
-#  User device_class for auto suggestion on HA card picks
-def send_discovery_messages(client):
-    device_info = {
-        "identifiers": [IDENTIFIER],
-        "name": BASE_TOPIC,
-        "manufacturer": "gardyn-of-eden",
-        "model": MODEL,
-        "sw_version": VERSION,
-    }
-
-    # Config for Light
-    TEMP_CONFIG_TOPIC = "homeassistant/light/gardyn/"+IDENTIFIER+"_light/config"
-    temp_config_payload = {
-        "name": "Light",
-        "unique_id": IDENTIFIER + "_light",
-        "platform": "mqtt",
-        "state_topic": BASE_TOPIC + "/light/state",
-        "command_topic": BASE_TOPIC + "/light/command",
-        "brightness_state_topic": BASE_TOPIC + "/light/brightness/state",
-        "brightness_command_topic": BASE_TOPIC + "/light/brightness/set",
-        "brightness_scale": 100,
-        "device": device_info
-    }
-    client.publish(TEMP_CONFIG_TOPIC, json.dumps(temp_config_payload), retain=True)
-
-    #Config for Pump (as a light with speed control, for example)
-    # todo: maybe use fan instead....
-    TEMP_CONFIG_TOPIC = "homeassistant/light/gardyn/"+IDENTIFIER+"_pump/config"
-    temp_config_payload = {
-        "name": "Pump",
-        "unique_id": IDENTIFIER + "_pump",
-        "platform": "mqtt",
-	"device_class": "fan",
-        "state_topic": BASE_TOPIC + "/pump/state",
-        "command_topic": BASE_TOPIC + "/pump/command",
-
-        "brightness_state_topic": BASE_TOPIC + "/pump/speed/state",
-        "brightness_command_topic": BASE_TOPIC + "/pump/speed/set",
-        "brightness_scale": 100,
-
-        # if using fan....
-	# "percentage_state_topic": BASE_TOPIC + "/pump/speed/state",
-	# "percentage_command_topic": BASE_TOPIC + "/pump/speed/set",
-	# "speed_range_min": 1,
-	# "speed_range_max": 100,
-        "icon": "mdi:water-pump",
-        "device": device_info
-    }
-    client.publish(TEMP_CONFIG_TOPIC, json.dumps(temp_config_payload), retain=True)
-
-    # Config for Automatic Pump Cycling Switch
-    TEMP_CONFIG_TOPIC = f"homeassistant/switch/gardyn/{IDENTIFIER}_auto_pump/config"
-    temp_config_payload = {
-        "name": "Auto Pump Cycle",
-        "unique_id": IDENTIFIER + "_auto_pump",
-        "platform": "mqtt",
-        "state_topic": BASE_TOPIC + "/pump/auto/state",
-        "command_topic": BASE_TOPIC + "/pump/auto/command",
-        "payload_on": "ON",
-        "payload_off": "OFF",
-        "icon": "mdi:water-pump",
-        "device": device_info
-    }
-    client.publish(TEMP_CONFIG_TOPIC, json.dumps(temp_config_payload), retain=True)
-
-    # Config for Day Pump ON Time
-    TEMP_CONFIG_TOPIC = f"homeassistant/number/gardyn/{IDENTIFIER}_day_pump_on/config"
-    temp_config_payload = {
-        "name": "Day Pump ON Time",
-        "unique_id": IDENTIFIER + "_day_pump_on",
-        "platform": "mqtt",
-        "state_topic": BASE_TOPIC + "/pump/auto/day/on_time",
-        "command_topic": BASE_TOPIC + "/pump/auto/day/on_time/set",
-        "min": 1,
-        "max": 60,
-        "step": 1,
-        "unit_of_measurement": "min",
-        "icon": "mdi:timer",
-        "device": device_info
-    }
-    client.publish(TEMP_CONFIG_TOPIC, json.dumps(temp_config_payload), retain=True)
-
-    # Config for Day Pump OFF Time
-    TEMP_CONFIG_TOPIC = f"homeassistant/number/gardyn/{IDENTIFIER}_day_pump_off/config"
-    temp_config_payload = {
-        "name": "Day Pump OFF Time",
-        "unique_id": IDENTIFIER + "_day_pump_off",
-        "platform": "mqtt",
-        "state_topic": BASE_TOPIC + "/pump/auto/day/off_time",
-        "command_topic": BASE_TOPIC + "/pump/auto/day/off_time/set",
-        "min": 1,
-        "max": 60,
-        "step": 1,
-        "unit_of_measurement": "min",
-        "icon": "mdi:timer-off",
-        "device": device_info
-    }
-    client.publish(TEMP_CONFIG_TOPIC, json.dumps(temp_config_payload), retain=True)
-
-    # Config for Night Pump ON Time
-    TEMP_CONFIG_TOPIC = f"homeassistant/number/gardyn/{IDENTIFIER}_night_pump_on/config"
-    temp_config_payload = {
-        "name": "Night Pump ON Time",
-        "unique_id": IDENTIFIER + "_night_pump_on",
-        "platform": "mqtt",
-        "state_topic": BASE_TOPIC + "/pump/auto/night/on_time",
-        "command_topic": BASE_TOPIC + "/pump/auto/night/on_time/set",
-        "min": 1,
-        "max": 60,
-        "step": 1,
-        "unit_of_measurement": "min",
-        "icon": "mdi:timer",
-        "device": device_info
-    }
-    client.publish(TEMP_CONFIG_TOPIC, json.dumps(temp_config_payload), retain=True)
-
-    # Config for Night Pump OFF Time
-    TEMP_CONFIG_TOPIC = f"homeassistant/number/gardyn/{IDENTIFIER}_night_pump_off/config"
-    temp_config_payload = {
-        "name": "Night Pump OFF Time",
-        "unique_id": IDENTIFIER + "_night_pump_off",
-        "platform": "mqtt",
-        "state_topic": BASE_TOPIC + "/pump/auto/night/off_time",
-        "command_topic": BASE_TOPIC + "/pump/auto/night/off_time/set",
-        "min": 1,
-        "max": 60,
-        "step": 1,
-        "unit_of_measurement": "min",
-        "icon": "mdi:timer-off",
-        "device": device_info
-    }
-    client.publish(TEMP_CONFIG_TOPIC, json.dumps(temp_config_payload), retain=True)
-
-    # Config for Day Start Hour
-    TEMP_CONFIG_TOPIC = f"homeassistant/number/gardyn/{IDENTIFIER}_day_start/config"
-    temp_config_payload = {
-        "name": "Day Start Hour",
-        "unique_id": IDENTIFIER + "_day_start",
-        "platform": "mqtt",
-        "state_topic": BASE_TOPIC + "/pump/auto/day_start",
-        "command_topic": BASE_TOPIC + "/pump/auto/day_start/set",
-        "min": 0,
-        "max": 23,
-        "step": 1,
-        "unit_of_measurement": "h",
-        "icon": "mdi:sun-clock",
-        "device": device_info
-    }
-    client.publish(TEMP_CONFIG_TOPIC, json.dumps(temp_config_payload), retain=True)
-
-    # Config for Day End Hour
-    TEMP_CONFIG_TOPIC = f"homeassistant/number/gardyn/{IDENTIFIER}_day_end/config"
-    temp_config_payload = {
-        "name": "Day End Hour",
-        "unique_id": IDENTIFIER + "_day_end",
-        "platform": "mqtt",
-        "state_topic": BASE_TOPIC + "/pump/auto/day_end",
-        "command_topic": BASE_TOPIC + "/pump/auto/day_end/set",
-        "min": 0,
-        "max": 23,
-        "step": 1,
-        "unit_of_measurement": "h",
-        "icon": "mdi:moon-clock",
-        "device": device_info
-    }
-    client.publish(TEMP_CONFIG_TOPIC, json.dumps(temp_config_payload), retain=True)
-
-    # Config for Current Schedule Status
-    TEMP_CONFIG_TOPIC = f"homeassistant/sensor/gardyn/{IDENTIFIER}_pump_schedule/config"
-    temp_config_payload = {
-        "name": "Pump Schedule",
-        "unique_id": IDENTIFIER + "_pump_schedule",
-        "platform": "mqtt",
-        "state_topic": BASE_TOPIC + "/pump/auto/schedule",
-        "icon": "mdi:schedule",
-        "device": device_info
-    }
-    client.publish(TEMP_CONFIG_TOPIC, json.dumps(temp_config_payload), retain=True)
-
-    #Config for Temperature from PCB
-    TEMP_CONFIG_TOPIC = "homeassistant/sensor/gardyn/"+IDENTIFIER+"_pcb_temp/config"
-    temp_config_payload = {
-        "name": "PCB Temperature",
-        "unique_id": IDENTIFIER + "_pcb_temp",
-        "state_topic": BASE_TOPIC + "/pcb/temperature",
-        "unit_of_measurement": "°C",
-        "device_class": "temperature",
-        "device": device_info
-    }
-    client.publish(TEMP_CONFIG_TOPIC, json.dumps(temp_config_payload), retain=True)
-
-    #Config for Temperature Sensor
-    TEMP_CONFIG_TOPIC = "homeassistant/sensor/gardyn/"+IDENTIFIER+"_temperature/config"
-    temp_config_payload = {
-        "name": "Temperature",
-        "unique_id": IDENTIFIER + "_temperature",
-        "state_topic": BASE_TOPIC + "/temperature",
-        "command_topic": BASE_TOPIC + "/temperature/get",
-        "unit_of_measurement": "°C",
-        "device_class": "temperature",
-        "device": device_info
-    }
-    client.publish(TEMP_CONFIG_TOPIC, json.dumps(temp_config_payload), retain=True)
-
-    #Config for CPU Temperature Sensor
-    TEMP_CONFIG_TOPIC = "homeassistant/sensor/gardyn/"+IDENTIFIER+"_cpu_temperature/config"
-    temp_config_payload = {
-        "name": "CPU Temperature",
-        "unique_id": IDENTIFIER + "_cpu_temperature",
-        "state_topic": BASE_TOPIC + "/cpu/temperature",
-        "command_topic": BASE_TOPIC + "/cpu/temperature/get",
-        "unit_of_measurement": "°C",
-        "device_class": "temperature",
-        "device": device_info
-    }
-    client.publish(TEMP_CONFIG_TOPIC, json.dumps(temp_config_payload), retain=True)
-
-    #Config for Humidity Sensor
-    TEMP_CONFIG_TOPIC = "homeassistant/sensor/gardyn/"+IDENTIFIER+"_humidity/config"
-    temp_config_payload = {
-        "name": "Humidity",
-        "unique_id": IDENTIFIER + "_humidity",
-        "state_topic": BASE_TOPIC + "/humidity",
-        "command_topic": BASE_TOPIC + "/humidity/get",
-        "unit_of_measurement": "%",
-        "device_class": "humidity",
-        "device": device_info
-    }
-    client.publish(TEMP_CONFIG_TOPIC, json.dumps(temp_config_payload), retain=True)
-
-
-    #Config for Water Level Sensor
-    TEMP_CONFIG_TOPIC = "homeassistant/sensor/gardyn/"+IDENTIFIER+"_water_level/config"
-
-    temp_config_payload = {
-        "name": "Water Level",
-        "unique_id": IDENTIFIER + "_water_level",
-        "state_topic": BASE_TOPIC + "/water/level",
-        "command_topic": BASE_TOPIC + "/water/level/get",
-        "unit_of_measurement": "cm",
-        "device_class": "distance",
-        "device": device_info
-    }
-    client.publish(TEMP_CONFIG_TOPIC, json.dumps(temp_config_payload), retain=True)
-
-    # Config for Water Low Binary Sensor
-    TEMP_CONFIG_TOPIC = f"homeassistant/binary_sensor/gardyn/{IDENTIFIER}_water_low/config"
-    temp_config_payload = {
-        "name": "Water Low",
-        "unique_id": IDENTIFIER + "_water_low",
-        "platform": "mqtt",
-        "state_topic": BASE_TOPIC + "/water/low/state",
-        "device_class": "problem",
-        "payload_on": "ON",
-        "payload_off": "OFF",
-        "device": device_info
-    }
-    client.publish(TEMP_CONFIG_TOPIC, json.dumps(temp_config_payload), retain=True)
-
-    # Config for Water Low Threshold (current value)
-        # Config for Water Low CM Set Number
-    TEMP_CONFIG_TOPIC = f"homeassistant/number/gardyn/{IDENTIFIER}_water_low_cm/config"
-    temp_config_payload = {
-        "name": "Set Water Low Threshold",
-        "unique_id": IDENTIFIER + "_water_low_cm",
-        "platform": "mqtt",
-        "state_topic": BASE_TOPIC + "/water/low/cm",
-        "command_topic": BASE_TOPIC + "/water/low/cm/set",
-        "min": 0,
-        "max": 15,
-        "step": 0.5,
-        "unit_of_measurement": "cm",
-        "device_class": "distance",
-        "device": device_info
-    }
-    client.publish(TEMP_CONFIG_TOPIC, json.dumps(temp_config_payload), retain=True)
-
-    # Config for Water Low Mode (Enabled/Disabled)
-    TEMP_CONFIG_TOPIC = f"homeassistant/sensor/gardyn/{IDENTIFIER}_water_low_mode/config"
-    temp_config_payload = {
-        "name": "Water Low Mode",
-        "unique_id": IDENTIFIER + "_water_low_mode",
-        "platform": "mqtt",
-        "state_topic": BASE_TOPIC + "/water/low/mode",
-        "icon": "mdi:toggle-switch",  # Optional: or use mdi:alert for dramatic effect
-        "device": device_info
-    }
-    client.publish(TEMP_CONFIG_TOPIC, json.dumps(temp_config_payload), retain=True)
-
-    # Discovery configuration for Camera A (image entity)
-    TEMP_CONFIG_TOPIC = "homeassistant/image/gardyn/" + IDENTIFIER + "_upper_camera/config"
-    temp_config_payload = {
-        "name": "Upper Camera",
-        "unique_id": IDENTIFIER + "_upper_camera",
-        "image_topic": BASE_TOPIC + "/image/upper_camera",
-        "encoding": "b64",
-        "content_type": "image/jpeg",
-        "object_id": IDENTIFIER + "_upper_camera",
-        "device": device_info
-    }
-    client.publish(TEMP_CONFIG_TOPIC, json.dumps(temp_config_payload), retain=True)
-
-    # Discovery configuration for Camera B (image entity)
-    TEMP_CONFIG_TOPIC = "homeassistant/image/gardyn/" + IDENTIFIER + "_lower_camera/config"
-    temp_config_payload = {
-        "name": "Lower Camera",
-        "unique_id": IDENTIFIER + "_lower_camera",
-        "image_topic": BASE_TOPIC + "/image/lower_camera",
-        "encoding": "b64",
-        "content_type": "image/jpeg",
-        "object_id": IDENTIFIER + "_lower_camera",
-        "device": device_info
-    }
-    client.publish(TEMP_CONFIG_TOPIC, json.dumps(temp_config_payload), retain=True)
-
 def on_connect(client, userdata, flags, rc, properties=None):
     logger.info(f"Connected with result code {rc}")
     client.subscribe(BASE_TOPIC + "/#")
     # client.subscribe(BASE_TOPIC + "/light/brightness/set")
-    send_discovery_messages(client)
     publish_water_low_mode(client)
     
     # Publish initial auto pump state and configuration
@@ -890,7 +585,7 @@ def publish_pcb_temperature(client):
             client.publish(BASE_TOPIC + "/pcb/temperature", f"{pcb_temp:.2f}")
         except Exception as e:
             logger.error(f"Failed to read or publish PCB temperature: {e}")
-        sleep(1*60)  # Publish frequency, every x seconds
+        sleep(5*60)  # Publish frequency, every x seconds
 
 def publish_cpu_temperature(client):
     while True:
@@ -903,7 +598,7 @@ def publish_cpu_temperature(client):
                 logger.warning("CPU temperature reading failed, skipping publish")
         except Exception as e:
             logger.error(f"Failed to read or publish CPU temperature: {e}")
-        sleep(1*60)  # Publish frequency, every x seconds
+        sleep(5*60)  # Publish frequency, every x seconds
 
 def publish_temperature(client):
     while True:
@@ -913,7 +608,7 @@ def publish_temperature(client):
             client.publish(BASE_TOPIC + "/temperature", f"{temperature:.2f}")
         except Exception as e:
             logger.error(f"Failed to read or publish ambient temperature: {e}")
-        sleep(1*60)  # Publish frequency, every x seconds
+        sleep(5*60)  # Publish frequency, every x seconds
 
 def publish_humidity(client):
     while True:
@@ -923,7 +618,7 @@ def publish_humidity(client):
             client.publish(BASE_TOPIC + "/humidity", f"{humidity:.2f}")
         except Exception as e:
             logger.error(f"Failed to read or publish ambient humidity: {e}")
-        sleep(1*60)  # Publish frequency, every x seconds
+        sleep(5*60)  # Publish frequency, every x seconds
 
 def publish_water_level(client):
     while True:
@@ -933,44 +628,7 @@ def publish_water_level(client):
             client.publish(BASE_TOPIC + "/water/level", f"{distance:.2f}")
         else:
             logger.warning("⚠️  Water level measurement failed")
-        sleep(5 * 60)  # Every 5 minutes
-
-def publish_images(client):
-    while True:
-        try:
-            # Capture upper camera image
-            subprocess.check_call([
-                'fswebcam', '-d', UPPER_CAMERA_DEVICE, '-r', CAMERA_RESOLUTION,
-                '-S', '2', '-F', '2', '--no-banner', UPPER_IMAGE_PATH
-            ])
-            logger.info(f"Captured image from upper camera ({UPPER_CAMERA_DEVICE})")
-
-            # Capture lower camera image
-            subprocess.check_call([
-                'fswebcam', '-d', LOWER_CAMERA_DEVICE, '-r', CAMERA_RESOLUTION,
-                '-S', '2', '-F', '2', '--no-banner', LOWER_IMAGE_PATH
-            ])
-            logger.info(f"Captured image from lower camera ({LOWER_CAMERA_DEVICE})")
-
-            # Publish upper camera image
-            with open(UPPER_IMAGE_PATH, 'rb') as f:
-                upper_cam_jpeg_data = f.read()  # Read as raw binary
-                client.publish(BASE_TOPIC + "/image/upper_camera", payload=upper_cam_jpeg_data, qos=0, retain=False)
-                logger.info("Published image to /image/upper_camera")
-
-            # Publish lower camera image
-            with open(LOWER_IMAGE_PATH, 'rb') as f:
-                lower_cam_jpeg_data = f.read()  # Read as raw binary
-                client.publish(BASE_TOPIC + "/image/lower_camera", payload=lower_cam_jpeg_data, qos=0, retain=False)
-                logger.info("Published image to /image/lower_camera")
-
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Camera capture failed: {e}")
-        except Exception as e:
-            logger.exception("Unexpected error during image capture/publish")
-
-        sleep(IMAGE_INTERVAL_SECONDS)
-
+        sleep(10 * 60)  # Every 5 minutes
 
 if __name__ == "__main__":
     logger.info(f"Connecting to {BROKER} on port {PORT} with keep alive {KEEP_ALIVE_INTERVAL}")
@@ -1000,9 +658,5 @@ if __name__ == "__main__":
     water_level_thread.daemon = True
     water_level_thread.start()
 
-
-    # publish_images_thread = threading.Thread(target=publish_images, args=(client,))
-    # publish_images_thread.daemon = True
-    # publish_images_thread.start()
-
     client.loop_forever()
+
