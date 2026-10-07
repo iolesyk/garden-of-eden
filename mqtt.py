@@ -355,6 +355,12 @@ def cycle_auto_pump(client):
             logger.warning(f"💧 Distance: {distance:.2f}cm (threshold: {WATER_LOW_CM:.2f}cm)")
             logger.warning("🚫 Skipping pump cycle - water too low")
             client.publish(BASE_TOPIC + "/water/low/state", "ON", retain=True)
+            if pump_is_on:
+                pump.off()
+                pump_state = False
+                pump_is_on = False
+                logger.info("🔴 PUMP TURNED OFF")
+                client.publish(BASE_TOPIC + "/pump/state", "OFF")
             flash_lights()
             # Schedule next cycle with current schedule
             next_duration = off_time * 60  # Convert to seconds
