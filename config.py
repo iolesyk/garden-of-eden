@@ -21,6 +21,9 @@ PASSWORD = os.getenv("MQTT_PASSWORD")
 SENSOR_TYPE = os.getenv('SENSOR_TYPE')
 
 WATER_LOW_CM = float(os.getenv("WATER_LOW_CM", 0)) or None
+# Distance from the level sensor to the tank bottom plus a margin; anything
+# farther is a sensor fault (condensation, splashes), not an empty tank
+WATER_SENSOR_MAX_CM = float(os.getenv("WATER_SENSOR_MAX_CM", 29))
 
 # Auto Pump Configuration
 AUTO_PUMP_ENABLED = os.getenv("AUTO_PUMP_ENABLED", "false").lower() in ("true", "1", "yes", "on")

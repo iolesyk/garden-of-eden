@@ -9,7 +9,7 @@ from datetime import datetime
 # import picamera
 # import cv2
 from time import sleep
-from config import USERNAME, PASSWORD, BROKER, PORT, KEEP_ALIVE_INTERVAL, BASE_TOPIC, IDENTIFIER, MODEL, VERSION, WATER_LOW_CM, UPPER_CAMERA_DEVICE, LOWER_CAMERA_DEVICE, UPPER_IMAGE_PATH, LOWER_IMAGE_PATH, CAMERA_RESOLUTION, IMAGE_INTERVAL_SECONDS, AUTO_PUMP_ENABLED, AUTO_PUMP_DAY_ON_TIME, AUTO_PUMP_DAY_OFF_TIME, AUTO_PUMP_NIGHT_ON_TIME, AUTO_PUMP_NIGHT_OFF_TIME, AUTO_PUMP_DAY_START_HOUR, AUTO_PUMP_DAY_END_HOUR, SUNNY_TIME_ENABLED, SUNNY_TIME_START_HOUR, SUNNY_TIME_END_HOUR, SUNNY_TIME_ON_TIME, SUNNY_TIME_OFF_TIME, TEMP_PUMP_ENABLED, TEMP_PUMP_THRESHOLD_1, TEMP_PUMP_ON_TIME_1, TEMP_PUMP_OFF_TIME_1, TEMP_PUMP_THRESHOLD_2, TEMP_PUMP_ON_TIME_2, TEMP_PUMP_OFF_TIME_2
+from config import USERNAME, PASSWORD, BROKER, PORT, KEEP_ALIVE_INTERVAL, BASE_TOPIC, IDENTIFIER, MODEL, VERSION, WATER_LOW_CM, WATER_SENSOR_MAX_CM, UPPER_CAMERA_DEVICE, LOWER_CAMERA_DEVICE, UPPER_IMAGE_PATH, LOWER_IMAGE_PATH, CAMERA_RESOLUTION, IMAGE_INTERVAL_SECONDS, AUTO_PUMP_ENABLED, AUTO_PUMP_DAY_ON_TIME, AUTO_PUMP_DAY_OFF_TIME, AUTO_PUMP_NIGHT_ON_TIME, AUTO_PUMP_NIGHT_OFF_TIME, AUTO_PUMP_DAY_START_HOUR, AUTO_PUMP_DAY_END_HOUR, SUNNY_TIME_ENABLED, SUNNY_TIME_START_HOUR, SUNNY_TIME_END_HOUR, SUNNY_TIME_ON_TIME, SUNNY_TIME_OFF_TIME, TEMP_PUMP_ENABLED, TEMP_PUMP_THRESHOLD_1, TEMP_PUMP_ON_TIME_1, TEMP_PUMP_OFF_TIME_1, TEMP_PUMP_THRESHOLD_2, TEMP_PUMP_ON_TIME_2, TEMP_PUMP_OFF_TIME_2
 
 from gpiozero import Button  # Import gpiozero Button
 from gpiozero.pins.pigpio import PiGPIOFactory
@@ -158,20 +158,29 @@ def flash_lights(times=3, delay=0.3):
         light.off()
 
 distance_lock = threading.Lock()
+water_sensor_fault = False
 
 def safe_distance_measure():
-    global distance_sensor
+    global distance_sensor, water_sensor_fault
     with distance_lock:
         try:
-            return distance_sensor.measure()
+            distance = distance_sensor.measure()
         except MeasurementError as e:
             logger.warning(f"Distance measure failed: {e}, trying recovery")
             try:
                 distance_sensor = Distance(pin_factory=pin_factory)
-                return distance_sensor.measure()
+                distance = distance_sensor.measure()
             except Exception as e2:
                 logger.error(f"Distance full recovery failed: {e2}")
                 return None
+    # Readings below the tank bottom come from condensation or splashes on the
+    # sensor, not from an empty tank, so they must not stop the pump
+    if distance > WATER_SENSOR_MAX_CM:
+        logger.warning(f"⚠️  Water level reading {distance:.2f}cm is below the tank bottom ({WATER_SENSOR_MAX_CM:.2f}cm) - sensor fault, ignoring")
+        water_sensor_fault = True
+        return None
+    water_sensor_fault = False
+    return distance
 
 def publish_water_low_mode(client):
     if WATER_LOW_CM not in (None, 0):
@@ -633,6 +642,7 @@ def publish_water_level(client):
             client.publish(BASE_TOPIC + "/water/level", f"{distance:.2f}")
         else:
             logger.warning("⚠️  Water level measurement failed")
+        client.publish(BASE_TOPIC + "/water/sensor_fault", "1" if water_sensor_fault else "0")
         sleep(10 * 60)  # Every 5 minutes
 
 if __name__ == "__main__":
